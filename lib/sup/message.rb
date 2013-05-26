@@ -21,9 +21,11 @@ class Message
     def reify_subj s; subj_is_reply?(s) ? s : "Re: " + s; end
   end
 
-  QUOTE_PATTERN = /^\s{0,4}[>|\}]/
-  BLOCK_QUOTE_PATTERN = /^-----\s*Original Message\s*----+$/
-  SIG_PATTERN = /(^(- )*-- ?$)|(^\s*----------+\s*$)|(^\s*_________+\s*$)|(^\s*--~--~-)|(^\s*--\+\+\*\*==)/
+  @@quote_pattern = /^\s{0,4}[>|\}]/
+  #@@block_quote_pattern = /^-----\s*Original Message\s*----+$/
+  @@block_quote_pattern = /Original Message/
+  @@sig_pattern = /(^(- )*-- ?$)|(^\s*----------+\s*$)|(^\s*_________+\s*$)|(^\s*--~--~-)|(^\s*--\+\+\*\*==)/
+  @@patterns_done = false
 
   GPG_SIGNED_START = "-----BEGIN PGP SIGNED MESSAGE-----"
   GPG_SIGNED_END = "-----END PGP SIGNED MESSAGE-----"
@@ -57,12 +59,30 @@ class Message
     @encrypted = false
     @chunks = nil
     @attachments = []
+    
+    load_patterns()
 
     ## we need to initialize this. see comments in parse_header as to
     ## why.
     @refs = []
 
     #parse_header(opts[:header] || @source.load_header(@source_info))
+  end
+
+  def load_patterns()
+    if not @@patterns_done then
+      [ :block_quote_pattern, :quote_pattern, :sig_pattern ].each do | k |
+        p = $config[k]
+        if p then
+          begin
+            eval("@@#{k.to_s} = Regexp.new p")
+          rescue RegexpError => e
+            info e.message
+          end
+        end
+      end
+      @@patterns_done = true
+    end
   end
 
   def decode_header_field v
@@ -613,11 +633,11 @@ private
         ## start of a quote. this is split into two regexen because the
         ## original regex /\w.*:$/ had very poor behavior on long lines
         ## like ":a:a:a:a:a" that occurred in certain emails.
-        if line =~ QUOTE_PATTERN || (line =~ /:$/ && line =~ /\w/ && nextline =~ QUOTE_PATTERN)
+        if line =~ @@quote_pattern || (line =~ /:$/ && line =~ /\w/ && nextline =~ @@quote_pattern)
           newstate = :quote
-        elsif line =~ SIG_PATTERN && (lines.length - i) < MAX_SIG_DISTANCE && !lines[(i+1)..-1].index { |l| l =~ /^-- $/ }
+        elsif line =~ @@sig_pattern && (lines.length - i) < MAX_SIG_DISTANCE && !lines[(i+1)..-1].index { |l| l =~ /^-- $/ }
           newstate = :sig
-        elsif line =~ BLOCK_QUOTE_PATTERN
+        elsif line =~ @@block_quote_pattern
           newstate = :block_quote
         end
 
@@ -632,9 +652,9 @@ private
       when :quote
         newstate = nil
 
-        if line =~ QUOTE_PATTERN || (line =~ /^\s*$/ && nextline =~ QUOTE_PATTERN)
+        if line =~ @@quote_pattern || (line =~ /^\s*$/ && nextline =~ @@quote_pattern)
           chunk_lines << line
-        elsif line =~ SIG_PATTERN && (lines.length - i) < MAX_SIG_DISTANCE
+        elsif line =~ @@sig_pattern && (lines.length - i) < MAX_SIG_DISTANCE
           newstate = :sig
         else
           newstate = :text
